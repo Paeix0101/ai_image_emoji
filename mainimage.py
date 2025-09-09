@@ -2,7 +2,7 @@ from flask import Flask, request
 import os
 import requests
 from PIL import Image
-import io
+from io import BytesIO
 
 app = Flask(__name__)
 
@@ -10,34 +10,18 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise SystemExit("Missing BOT_TOKEN environment variable")
 
-WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "emoji_webhook")
+WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", BOT_TOKEN)
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-FILE_API = f"https://api.telegram.org/file/bot{BOT_TOKEN}"
+FILE_URL = f"https://api.telegram.org/file/bot{BOT_TOKEN}"
 
-# Emojis by brightness (dark → light)
-EMOJI_MAP = ["⬛", "🟫", "🟩", "🟨", "🟦", "⬜"]
+WELCOME_MSG = "<i>🖼 Image → Emoji Converter\n\nJust send me an image and I will make it tiny like an emoji!</i>"
 
-WELCOME_MSG = "<i>image to emoji converter \n\n just send the image</i>"
+def send_message(chat_id, text):
+    requests.post(f"{API_URL}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
 
-def send_message(chat_id: int, text: str, parse_mode: str = "HTML"):
-    """Send a message back to Telegram"""
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-    requests.post(f"{API_URL}/sendMessage", json=payload)
-
-def convert_image_to_emoji(image_bytes):
-    """Convert image to emoji mosaic"""
-    img = Image.open(io.BytesIO(image_bytes)).convert("L")  # grayscale
-    img = img.resize((30, 30))  # shrink for text limits
-
-    emoji_art = ""
-    for y in range(img.height):
-        row = ""
-        for x in range(img.width):
-            brightness = img.getpixel((x, y))
-            idx = brightness * (len(EMOJI_MAP) - 1) // 255
-            row += EMOJI_MAP[idx]
-        emoji_art += row + "\n"
-    return emoji_art
+def send_photo(chat_id, file_bytes):
+    files = {"photo": ("emoji.png", file_bytes)}
+    requests.post(f"{API_URL}/sendPhoto", data={"chat_id": chat_id}, files=files)
 
 @app.route(f"/{WEBHOOK_PATH}", methods=["POST"])
 def webhook():
@@ -45,36 +29,39 @@ def webhook():
     if not data:
         return "ok"
 
-    msg = data.get("message")
-    if not msg:
+    msg = data.get("message") or {}
+    chat_id = msg.get("chat", {}).get("id")
+
+    # /start command
+    if msg.get("text", "").startswith("/start"):
+        send_message(chat_id, WELCOME_MSG)
         return "ok"
 
-    chat_id = msg["chat"]["id"]
-
-    # if /start command
-    text = msg.get("text", "")
-    if text and text.strip().lower().startswith("/start"):
-        send_message(chat_id, WELCOME_MSG, parse_mode="HTML")
-        return "ok"
-
-    # if photo message
+    # Handle photos
     if "photo" in msg:
-        file_id = msg["photo"][-1]["file_id"]  # largest size
-        file_info = requests.get(f"{API_URL}/getFile", params={"file_id": file_id}).json()
-        file_path = file_info["result"]["file_path"]
+        # Get highest resolution photo
+        photo = msg["photo"][-1]
+        file_id = photo["file_id"]
 
-        # download image
-        file_url = f"{FILE_API}/{file_path}"
-        img_data = requests.get(file_url).content
+        # Get file path
+        r = requests.get(f"{API_URL}/getFile?file_id={file_id}")
+        file_path = r.json()["result"]["file_path"]
 
-        # convert to emoji
-        emoji_art = convert_image_to_emoji(img_data)
+        # Download file
+        img_data = requests.get(f"{FILE_URL}/{file_path}").content
 
-        # send back
-        if len(emoji_art) > 4000:  # Telegram message limit
-            send_message(chat_id, "⚠️ Emoji art too large, please send a smaller image.")
-        else:
-            send_message(chat_id, emoji_art)
+        # Resize image to tiny emoji-like size
+        img = Image.open(BytesIO(img_data))
+        img = img.convert("RGBA")
+        img = img.resize((32, 32))  # make it tiny
+
+        # Save to memory
+        output = BytesIO()
+        img.save(output, format="PNG")
+        output.seek(0)
+
+        # Send back resized image
+        send_photo(chat_id, output)
 
     return "ok"
 
