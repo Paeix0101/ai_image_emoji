@@ -14,14 +14,14 @@ WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", BOT_TOKEN)
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 FILE_URL = f"https://api.telegram.org/file/bot{BOT_TOKEN}"
 
-WELCOME_MSG = "<i>🖼 Image → Emoji Converter\n\nJust send me an image and I will make it tiny like an emoji!</i>"
+WELCOME_MSG = "<i>✨ Image → Emoji Converter\n\nJust send me an image and I’ll turn it into a Telegram sticker (like an emoji)!</i>"
 
 def send_message(chat_id, text):
     requests.post(f"{API_URL}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
 
-def send_photo(chat_id, file_bytes):
-    files = {"photo": ("emoji.png", file_bytes)}
-    requests.post(f"{API_URL}/sendPhoto", data={"chat_id": chat_id}, files=files)
+def send_document(chat_id, file_bytes):
+    files = {"document": ("sticker.png", file_bytes)}
+    requests.post(f"{API_URL}/sendDocument", data={"chat_id": chat_id}, files=files)
 
 @app.route(f"/{WEBHOOK_PATH}", methods=["POST"])
 def webhook():
@@ -39,8 +39,7 @@ def webhook():
 
     # Handle photos
     if "photo" in msg:
-        # Get highest resolution photo
-        photo = msg["photo"][-1]
+        photo = msg["photo"][-1]  # best quality
         file_id = photo["file_id"]
 
         # Get file path
@@ -50,18 +49,16 @@ def webhook():
         # Download file
         img_data = requests.get(f"{FILE_URL}/{file_path}").content
 
-        # Resize image to tiny emoji-like size
-        img = Image.open(BytesIO(img_data))
-        img = img.convert("RGBA")
-        img = img.resize((32, 32))  # make it tiny
+        # Convert image to sticker size (512x512 max)
+        img = Image.open(BytesIO(img_data)).convert("RGBA")
+        img.thumbnail((512, 512))  # keep ratio, max 512x512
 
-        # Save to memory
         output = BytesIO()
-        img.save(output, format="PNG")
+        img.save(output, format="PNG")  # stickers support PNG/WEBP
         output.seek(0)
 
-        # Send back resized image
-        send_photo(chat_id, output)
+        # Send back as sticker-like file
+        send_document(chat_id, output)
 
     return "ok"
 
